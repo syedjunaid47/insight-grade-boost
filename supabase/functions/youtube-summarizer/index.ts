@@ -36,7 +36,7 @@ serve(async (req) => {
     // Get video metadata using YouTube API
     const apiKey = Deno.env.get('YOUTUBE_API_KEY');
     if (!apiKey) {
-      // Fallback to demo data if no API key
+      console.log('No YouTube API key found, using demo data');
       const demoSummary = generateDemoSummary(url);
       return new Response(
         JSON.stringify(demoSummary),
@@ -50,6 +50,7 @@ serve(async (req) => {
     );
 
     if (!videoResponse.ok) {
+      console.error('YouTube API error:', await videoResponse.text());
       throw new Error('Failed to fetch video details');
     }
 
@@ -57,14 +58,15 @@ serve(async (req) => {
     
     if (!videoData.items || videoData.items.length === 0) {
       return new Response(
-        JSON.stringify({ error: 'Video not found' }),
+        JSON.stringify({ error: 'Video not found or is private' }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     const video = videoData.items[0];
+    console.log('Video found:', video.snippet.title);
     
-    // Get captions/transcript (simplified for demo)
+    // Get captions/transcript
     const transcript = await getVideoTranscript(videoId, apiKey);
     
     // Generate AI summary
@@ -73,7 +75,7 @@ serve(async (req) => {
     const result = {
       videoInfo: {
         title: video.snippet.title,
-        description: video.snippet.description,
+        description: video.snippet.description?.substring(0, 300) + (video.snippet.description?.length > 300 ? '...' : ''),
         duration: formatDuration(video.contentDetails.duration),
         views: formatViews(video.statistics.viewCount),
         publishedAt: video.snippet.publishedAt,
@@ -163,11 +165,12 @@ async function generateAISummary(transcript: string, snippet: any): Promise<stri
   const openAIKey = Deno.env.get('OPENAI_API_KEY');
   
   if (!openAIKey) {
-    // Generate a detailed demo summary based on video title and description
+    console.log('No OpenAI API key found, generating enhanced demo summary');
     return generateDetailedDemoSummary(snippet.title, snippet.description);
   }
   
   try {
+    console.log('Generating AI summary with OpenAI...');
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -179,19 +182,40 @@ async function generateAISummary(transcript: string, snippet: any): Promise<stri
         messages: [
           {
             role: 'system',
-            content: 'You are an educational AI assistant that creates detailed, structured summaries of educational videos. Format your response with clear headings, bullet points, and key takeaways. Focus on the most important concepts and make it study-friendly.'
+            content: `You are an educational AI assistant that creates comprehensive, structured summaries of educational videos. Your summaries should be:
+            1. Well-organized with clear headings and subheadings
+            2. Include key concepts, definitions, and important points
+            3. Highlight main takeaways and learning objectives
+            4. Use bullet points and numbered lists for clarity
+            5. Include study tips and suggestions for further learning
+            6. Format using markdown for better readability
+            
+            Structure your response with sections like:
+            - Overview/Introduction
+            - Key Concepts
+            - Main Points/Topics Covered
+            - Important Facts/Figures
+            - Study Tips/Recommendations
+            - Summary/Conclusion`
           },
           {
             role: 'user',
-            content: `Please create a detailed summary of this educational video. Title: "${snippet.title}". Description: "${snippet.description}". Transcript: "${transcript}". Please structure the summary with clear sections and highlight key learning points.`
+            content: `Please create a comprehensive educational summary of this video:
+            
+            Title: "${snippet.title}"
+            ${snippet.description ? `Description: "${snippet.description.substring(0, 500)}"` : ''}
+            ${transcript !== "Transcript not available for this video." && transcript !== "No captions available for this video." ? `Transcript: "${transcript.substring(0, 2000)}"` : ''}
+            
+            Please provide a detailed, study-friendly summary that helps students understand and learn from this content.`
           }
         ],
-        max_tokens: 1500,
+        max_tokens: 2000,
         temperature: 0.3,
       }),
     });
 
     if (!response.ok) {
+      console.error('OpenAI API error:', response.status, await response.text());
       throw new Error('OpenAI API request failed');
     }
 
